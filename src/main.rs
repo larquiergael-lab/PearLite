@@ -154,7 +154,10 @@ fn run(start_hidden: bool, start_url: Option<String>) -> Result<(), Box<dyn std:
         .with_url(start_url.unwrap_or_else(|| cfg.start_url()))
         .with_initialization_script_for_main_only(init_script(&cfg), true)
         .with_ipc_handler(move |req| {
-            let _ = ipc_proxy.send_event(UserEvent::Page(req.into_body()));
+            // Only YouTube Music itself may report tracks (not, say, a Google sign-in page).
+            if win::is_ytm_url(&req.uri().to_string()) {
+                let _ = ipc_proxy.send_event(UserEvent::Page(req.into_body()));
+            }
         })
         .with_navigation_handler(move |url| {
             if win::is_in_app_url(&url) {
@@ -623,6 +626,7 @@ impl App {
         };
         match msg {
             PageMsg::Meta { title, artist, album, art } => {
+                let art = if win::is_artwork_url(&art) { art } else { String::new() };
                 let track = Track { title, artist, album, art };
                 if track == self.track {
                     return;

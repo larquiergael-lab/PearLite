@@ -192,6 +192,19 @@ pub fn is_ytm_url(url: &str) -> bool {
     host_of(url).is_some_and(|h| h == "music.youtube.com")
 }
 
+/// Cover art comes from the page and is handed to Windows (media flyout), which fetches it
+/// itself, so only https images from Google's CDNs get through. Anything else (`file:`,
+/// UNC paths, other hosts) could make Windows connect somewhere it shouldn't.
+pub fn is_artwork_url(url: &str) -> bool {
+    if !url.starts_with("https://") {
+        return false;
+    }
+    let Some(host) = host_of(url) else { return false };
+    let plain = host.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
+    let is_domain = |d: &str| host == d || host.ends_with(&format!(".{d}"));
+    plain && (is_domain("ytimg.com") || is_domain("googleusercontent.com") || is_domain("ggpht.com"))
+}
+
 /// Pages allowed to load inside the app window: YouTube itself plus the Google sign-in flow.
 /// Everything else is handed to the default browser.
 pub fn is_in_app_url(url: &str) -> bool {
@@ -318,6 +331,20 @@ mod tests {
         assert!(!is_in_app_url("https://notyoutube.com/"));
         assert!(!is_in_app_url("https://open.spotify.com/"));
         assert!(!is_in_app_url("file:///C:/Windows"));
+    }
+
+    #[test]
+    fn artwork() {
+        assert!(is_artwork_url("https://lh3.googleusercontent.com/abc=w544-h544"));
+        assert!(is_artwork_url("https://i.ytimg.com/vi/x/sddefault.jpg"));
+        assert!(is_artwork_url("https://yt3.ggpht.com/abc"));
+        assert!(!is_artwork_url("http://i.ytimg.com/vi/x/sddefault.jpg"));
+        assert!(!is_artwork_url("file://attacker/share/a.jpg"));
+        assert!(!is_artwork_url("\\\\attacker\\share\\a.jpg"));
+        assert!(!is_artwork_url("https://evil.com\\.ytimg.com/a.jpg"));
+        assert!(!is_artwork_url("https://i.ytimg.com@evil.com/a.jpg"));
+        assert!(!is_artwork_url("https://ytimg.com.evil.com/a.jpg"));
+        assert!(!is_artwork_url(""));
     }
 
     #[test]
