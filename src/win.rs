@@ -180,10 +180,11 @@ pub fn error_box(text: &str) {
     }
 }
 
-/// Lower-cased host of an http(s) URL.
+/// Lower-cased host of an http(s) URL. Like browsers (WHATWG), `\` ends the host as `/` does,
+/// so `https://evil.com\@music.youtube.com/` is read as evil.com, the host actually contacted.
 pub fn host_of(url: &str) -> Option<String> {
     let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
-    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    let authority = &rest[..rest.find(['/', '\\', '?', '#']).unwrap_or(rest.len())];
     let host = authority.rsplit('@').next()?.split(':').next()?;
     Some(host.to_ascii_lowercase())
 }
@@ -193,16 +194,20 @@ pub fn is_ytm_url(url: &str) -> bool {
 }
 
 /// Cover art comes from the page and is handed to Windows (media flyout), which fetches it
-/// itself, so only https images from Google's CDNs get through. Anything else (`file:`,
-/// UNC paths, other hosts) could make Windows connect somewhere it shouldn't.
-pub fn is_artwork_url(url: &str) -> bool {
-    if !url.starts_with("https://") {
-        return false;
-    }
-    let Some(host) = host_of(url) else { return false };
-    let plain = host.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
+/// itself, so only https images from Google's CDNs get through. Anything else (`file:`, UNC
+/// paths, other hosts) could make Windows connect somewhere it shouldn't.
+///
+/// The host part must be nothing but letters, digits, `-` and `.`: no `\`, `@`, `:`, `%`,
+/// whitespace or control characters. Every URL parser reads such a host the same way, so
+/// this check and Windows can't disagree about where the request goes.
+pub fn artwork_url(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://")?;
+    let host = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    let host = host.to_ascii_lowercase();
+    let plain = !host.is_empty() && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
     let is_domain = |d: &str| host == d || host.ends_with(&format!(".{d}"));
-    plain && (is_domain("ytimg.com") || is_domain("googleusercontent.com") || is_domain("ggpht.com"))
+    let allowed = plain && (is_domain("ytimg.com") || is_domain("googleusercontent.com") || is_domain("ggpht.com"));
+    allowed.then(|| url.to_owned())
 }
 
 /// Pages allowed to load inside the app window: YouTube itself plus the Google sign-in flow.
@@ -328,6 +333,8 @@ mod tests {
         assert!(is_in_app_url("https://accounts.google.co.uk/accounts/SetSID"));
         assert!(is_in_app_url("https://consent.youtube.com/m"));
         assert!(!is_in_app_url("https://accounts.google.evil.com/"));
+        assert!(!is_in_app_url("https://evil.com\\@music.youtube.com/"));
+        assert!(!is_ytm_url("https://evil.com\\@music.youtube.com/"));
         assert!(!is_in_app_url("https://notyoutube.com/"));
         assert!(!is_in_app_url("https://open.spotify.com/"));
         assert!(!is_in_app_url("file:///C:/Windows"));
@@ -335,16 +342,25 @@ mod tests {
 
     #[test]
     fn artwork() {
-        assert!(is_artwork_url("https://lh3.googleusercontent.com/abc=w544-h544"));
-        assert!(is_artwork_url("https://i.ytimg.com/vi/x/sddefault.jpg"));
-        assert!(is_artwork_url("https://yt3.ggpht.com/abc"));
-        assert!(!is_artwork_url("http://i.ytimg.com/vi/x/sddefault.jpg"));
-        assert!(!is_artwork_url("file://attacker/share/a.jpg"));
-        assert!(!is_artwork_url("\\\\attacker\\share\\a.jpg"));
-        assert!(!is_artwork_url("https://evil.com\\.ytimg.com/a.jpg"));
-        assert!(!is_artwork_url("https://i.ytimg.com@evil.com/a.jpg"));
-        assert!(!is_artwork_url("https://ytimg.com.evil.com/a.jpg"));
-        assert!(!is_artwork_url(""));
+        let ok = |u: &str| artwork_url(u).is_some();
+        assert!(ok("https://lh3.googleusercontent.com/abc=w544-h544"));
+        assert!(ok("https://i.ytimg.com/vi/x/sddefault.jpg"));
+        assert!(ok("https://yt3.ggpht.com/abc"));
+        assert!(ok("https://I.YTIMG.com/vi/x.jpg"));
+        assert!(!ok("https://i.ytimg.com:443/vi/x.jpg"));
+        assert!(!ok("https://i.ytimg.com\t.evil.com/a.jpg"));
+        assert!(!ok(" https://i.ytimg.com/a.jpg"));
+        assert!(!ok("http://i.ytimg.com/vi/x/sddefault.jpg"));
+        assert!(!ok("file://attacker/share/a.jpg"));
+        assert!(!ok("\\\\attacker\\share\\a.jpg"));
+        assert!(!ok("https://evil.com\\.ytimg.com/a.jpg"));
+        assert!(!ok("https://evil.com\\@i.ytimg.com/a.jpg"));
+        assert!(!ok("https://i.ytimg.com@evil.com/a.jpg"));
+        assert!(!ok("https://user@i.ytimg.com/a.jpg"));
+        assert!(!ok("https://i.ytimg.com:8443/a.jpg"));
+        assert!(!ok("https://ytimg.com.evil.com/a.jpg"));
+        assert!(!ok("https://evil%2ecom/a.jpg"));
+        assert!(!ok(""));
     }
 
     #[test]

@@ -626,7 +626,7 @@ impl App {
         };
         match msg {
             PageMsg::Meta { title, artist, album, art } => {
-                let art = if win::is_artwork_url(&art) { art } else { String::new() };
+                let art = win::artwork_url(&art).unwrap_or_default();
                 let track = Track { title, artist, album, art };
                 if track == self.track {
                     return;
